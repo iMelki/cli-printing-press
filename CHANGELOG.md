@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+* **fork:** restored buildability after the preserved local patchset left
+  tracked source/test/template files as zero-byte artifacts. Existing files were
+  restored from the clean base, new empty placeholders were removed, and the
+  fork now passes `go test -run '^$' ./...` plus `go build ./cmd/printing-press`.
+
 ## [4.2.2](https://github.com/mvanhorn/cli-printing-press/compare/v4.2.1...v4.2.2) (2026-05-09)
 
 
