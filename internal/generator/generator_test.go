@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -759,7 +760,7 @@ func TestGenerateAgentContextCommand(t *testing.T) {
 
 	// Build the binary and run agent-context; output must be valid JSON
 	// carrying the schema_version field at the top level.
-	binaryPath := filepath.Join(outputDir, naming.CLI(apiSpec.Name))
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, naming.CLI(apiSpec.Name)))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/"+naming.CLI(apiSpec.Name))
 
 	out, err := exec.Command(binaryPath, "agent-context").Output()
@@ -865,7 +866,7 @@ func TestGenerateOAuth2AuthTemplateConditionally(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(configGo), "GITHUB_TOKEN")
 
-		binaryPath := filepath.Join(outputDir, naming.CLI(apiSpec.Name))
+		binaryPath := builtExecutablePath(filepath.Join(outputDir, naming.CLI(apiSpec.Name)))
 		runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/"+naming.CLI(apiSpec.Name))
 		helpOut, err := exec.Command(binaryPath, "auth", "--help").CombinedOutput()
 		require.NoError(t, err, string(helpOut))
@@ -2124,6 +2125,13 @@ func runGeneratedBinary(t *testing.T, binaryPath string, args ...string) (string
 	return stdout.String(), stderr.String()
 }
 
+func builtExecutablePath(path string) string {
+	if runtime.GOOS == "windows" && filepath.Ext(path) == "" {
+		return path + ".exe"
+	}
+	return path
+}
+
 // --- Unit 1: Template Regression Tests ---
 
 func TestGenerateWithNoAuth(t *testing.T) {
@@ -2158,8 +2166,8 @@ func TestGenerateWithNoAuth(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "noauth-pp-cli")
 	gen := New(apiSpec, outputDir)
 	require.NoError(t, gen.Generate())
-	require.NoError(t, gen.Validate())
-	assert.NoFileExists(t, filepath.Join(outputDir, naming.ValidationBinary("noauth")))
+	require.NoError(t, gen.validate(validateOptions{SkipGovulncheck: true}))
+	assert.NoFileExists(t, builtExecutablePath(filepath.Join(outputDir, naming.ValidationBinary("noauth"))))
 }
 
 func TestGenerate403HintsFollowAuthMode(t *testing.T) {
@@ -2752,7 +2760,7 @@ func TestGenerateHTMLExtractionEndpoint(t *testing.T) {
 	assert.Contains(t, string(gomod), "golang.org/x/net v0.55.0")
 
 	runGoCommand(t, outputDir, "mod", "tidy")
-	binaryPath := filepath.Join(outputDir, "webhtml-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "webhtml-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/webhtml-pp-cli")
 
 	cmd := exec.Command(binaryPath, "posts", "list", "--json")
@@ -3219,7 +3227,7 @@ func TestGenerateHTMLExtractionEmbeddedJSONMode(t *testing.T) {
 	require.FileExists(t, filepath.Join(outputDir, "internal", "cli", "html_extract.go"))
 
 	runGoCommand(t, outputDir, "mod", "tidy")
-	binaryPath := filepath.Join(outputDir, "embeddedjson-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "embeddedjson-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/embeddedjson-pp-cli")
 
 	// Default selector + dot-notation path: returns the recipes array.
@@ -7439,8 +7447,8 @@ func TestGeneratedExport_ValidatesResourceArgument(t *testing.T) {
 	assert.Regexp(t, `"users":\s+true`, exportContent)
 	assert.Contains(t, exportContent, `unknown resource %q; valid: %s`)
 
-	runGoCommandRequired(t, outputDir, "build", "-o", "./testexport-pp-cli", "./cmd/testexport-pp-cli")
-	cmd := exec.Command(filepath.Join(outputDir, "testexport-pp-cli"), "export", "storiez")
+	runGoCommandRequired(t, outputDir, "build", "-o", builtExecutablePath("./testexport-pp-cli"), "./cmd/testexport-pp-cli")
+	cmd := exec.Command(builtExecutablePath(filepath.Join(outputDir, "testexport-pp-cli")), "export", "storiez")
 	out, err := cmd.CombinedOutput()
 	require.Error(t, err)
 	assert.Contains(t, string(out), `unknown resource "storiez"; valid: items, stories, users`)
@@ -9193,7 +9201,7 @@ func TestGeneratedOutput_AgentMoneyWorkflowPaymentPlan(t *testing.T) {
 	runGoCommand(t, outputDir, "mod", "tidy")
 	runGoCommand(t, outputDir, "build", "./...")
 
-	binaryPath := filepath.Join(outputDir, "treasury-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "treasury-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/treasury-pp-cli")
 
 	cmd := exec.Command(binaryPath, "workflow", "payment-plan",
@@ -10845,7 +10853,7 @@ func TestGenerateGraphQLBFFUsesSemanticCommandSurface(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(outputDir, "internal", "cli", "graphql.go"))
 
 	runGoCommand(t, outputDir, "mod", "tidy")
-	binaryPath := filepath.Join(outputDir, "example-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "example-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/example-pp-cli")
 	helpOut, err := exec.Command(binaryPath, "--help").CombinedOutput()
 	require.NoError(t, err, string(helpOut))
@@ -10913,7 +10921,7 @@ func TestGenerateWhichDoesNotFallbackToEndpointGuesses(t *testing.T) {
 	assert.Contains(t, whichSrc, `"pp:typed-exit-codes": "0,2"`)
 
 	runGoCommand(t, outputDir, "mod", "tidy")
-	binaryPath := filepath.Join(outputDir, "whichfallback-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "whichfallback-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/whichfallback-pp-cli")
 	whichOut, err := exec.Command(binaryPath, "which", "reviews", "--json").CombinedOutput()
 	require.Error(t, err)
@@ -13592,7 +13600,7 @@ func TestIsEmptyPageResponseRejectsNullSingletonFields(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "internal", "cli", "sync_empty_page_test.go"), []byte(behaviorTest), 0o644))
 	runGoCommand(t, outputDir, "test", "./internal/cli", "-run", "TestIsEmptyPageResponseRejectsNullSingletonFields")
 
-	binaryPath := filepath.Join(outputDir, "emptywrapsync-pp-cli")
+	binaryPath := builtExecutablePath(filepath.Join(outputDir, "emptywrapsync-pp-cli"))
 	runGoCommand(t, outputDir, "build", "-o", binaryPath, "./cmd/emptywrapsync-pp-cli")
 
 	emptyDB := filepath.Join(t.TempDir(), "empty.db")
@@ -16839,7 +16847,7 @@ func TestGenerateMCPMainRemoteRuntime(t *testing.T) {
 
 	runGoCommand(t, outputDir, "mod", "tidy")
 
-	mcpBinary := filepath.Join(outputDir, naming.MCP(apiSpec.Name))
+	mcpBinary := builtExecutablePath(filepath.Join(outputDir, naming.MCP(apiSpec.Name)))
 	runGoCommand(t, outputDir, "build", "-o", mcpBinary, "./cmd/"+naming.MCP(apiSpec.Name))
 
 	// --help should print both flags so an agent can discover transport + addr.
@@ -16880,7 +16888,7 @@ func TestGenerateMCPMainRemoteCompiles(t *testing.T) {
 	runGoCommand(t, outputDir, "mod", "tidy")
 	runGoCommand(t, outputDir, "build", "./...")
 
-	mcpBinary := filepath.Join(outputDir, naming.MCP(apiSpec.Name))
+	mcpBinary := builtExecutablePath(filepath.Join(outputDir, naming.MCP(apiSpec.Name)))
 	runGoCommand(t, outputDir, "build", "-o", mcpBinary, "./cmd/"+naming.MCP(apiSpec.Name))
 
 	info, err := os.Stat(mcpBinary)

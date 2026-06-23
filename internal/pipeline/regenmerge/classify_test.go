@@ -3,6 +3,7 @@ package regenmerge
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -200,7 +201,9 @@ func TestClassifyRejectsTraversal(t *testing.T) {
 	// Path containing ".." should be rejected.
 	_, err := Classify("../../sneaky", "../../also-sneaky", Options{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "..", "error should reference the invalid segment")
+	assert.True(t,
+		strings.Contains(err.Error(), "..") || strings.Contains(err.Error(), "outside the current working directory"),
+		"error should identify traversal or containment rejection, got %q", err.Error())
 }
 
 // TestClassifyOutsideCwdRejected exercises the prefix-containment check

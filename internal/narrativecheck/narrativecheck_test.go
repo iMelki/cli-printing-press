@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -990,8 +991,12 @@ func main() {
 			return
 		}
 		stubPath = filepath.Join(dir, "stub")
+		if runtime.GOOS == "windows" {
+			stubPath += ".exe"
+		}
 		if out, err := exec.Command("go", "build", "-o", stubPath, srcPath).CombinedOutput(); err != nil {
 			stubErr = fmt.Errorf("building stub: %v\n%s", err, out)
+			return
 		}
 	})
 	if stubErr != nil {

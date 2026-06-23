@@ -884,7 +884,7 @@ func readContractFile(t *testing.T, path string) string {
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	return string(data)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 func extractContractBlock(t *testing.T, content string) string {

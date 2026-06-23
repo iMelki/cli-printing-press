@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1168,7 +1169,9 @@ func TestWriteTrafficAnalysisAndDefaultPath(t *testing.T) {
 	assert.True(t, strings.HasSuffix(string(data), "\n"))
 	info, err := os.Stat(outputPath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 	assert.Equal(t, filepath.Join("/tmp", "example-spec-traffic-analysis.json"), DefaultTrafficAnalysisPath(filepath.Join("/tmp", "example-spec.yaml")))
 }
 
