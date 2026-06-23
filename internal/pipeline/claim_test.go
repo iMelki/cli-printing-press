@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -54,6 +55,9 @@ func TestClaimOutputDir_MaxRetries(t *testing.T) {
 }
 
 func TestClaimOutputDir_PermissionError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix root permission path is not portable to Windows")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("test requires non-root")
 	}

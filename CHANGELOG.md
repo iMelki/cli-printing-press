@@ -4,6 +4,12 @@
 
 ### Fixed
 
+* **cli:** stabilized the Windows full test suite after the fork patchset
+  build repair. Generated/test helper binaries now build to platform executable
+  paths before execution, local npm HTTP fixtures avoid fragile parallel socket
+  reuse, Windows-only permission/certificate expectations are handled
+  explicitly, and `go test -p 1 -count=1 -timeout 300s ./...` passes on
+  Windows.
 * **fork:** restored buildability after the preserved local patchset left
   tracked source/test/template files as zero-byte artifacts. Existing files were
   restored from the clean base, new empty placeholders were removed, and the

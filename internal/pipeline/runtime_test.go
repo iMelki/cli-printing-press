@@ -5,8 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/mvanhorn/cli-printing-press/v4/internal/platform"
 	apispec "github.com/mvanhorn/cli-printing-press/v4/internal/spec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +39,7 @@ func initRoot() {
 	assert.Equal(t, "PASS", report.Verdict)
 	assert.FileExists(t, report.Binary)
 
-	assert.FileExists(t, filepath.Join(dir, "sample-cli"))
+	assert.FileExists(t, platform.ExecutablePath(filepath.Join(dir, "sample-cli")))
 	assert.NoDirExists(t, filepath.Join(dir, "cmd", "library"))
 	assert.NoFileExists(t, filepath.Join(dir, ".DS_Store"))
 	assert.DirExists(t, filepath.Join(dir, ".cache"))
@@ -158,7 +160,7 @@ func main() {
 	os.Exit(1)
 }
 `)
-	binaryPath := filepath.Join(dir, "test-cli")
+	binaryPath := platform.ExecutablePath(filepath.Join(dir, "test-cli"))
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
 	out, err := buildCmd.CombinedOutput()
 	require.NoError(t, err, "building test binary: %s", string(out))
@@ -185,7 +187,7 @@ func main() {
 	os.Exit(1)
 }
 `)
-	binaryPath := filepath.Join(dir, "test-cli")
+	binaryPath := platform.ExecutablePath(filepath.Join(dir, "test-cli"))
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
 	out, err := buildCmd.CombinedOutput()
 	require.NoError(t, err, "building test binary: %s", string(out))
@@ -223,7 +225,7 @@ func main() {
 	fmt.Println("  -h, --help   help for test-cli")
 }
 `)
-	binaryPath := filepath.Join(binDir, "test-cli")
+	binaryPath := platform.ExecutablePath(filepath.Join(binDir, "test-cli"))
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
 	out, err := buildCmd.CombinedOutput()
 	require.NoError(t, err, "building test binary: %s", string(out))
@@ -347,7 +349,7 @@ func main() {}
 
 	binaryPath, err := buildCLI(dir)
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, "sample-pp-cli-2"), binaryPath)
+	assert.Equal(t, platform.ExecutablePath(filepath.Join(dir, "sample-pp-cli-2")), binaryPath)
 	assert.FileExists(t, binaryPath)
 }
 
@@ -568,17 +570,25 @@ func listHandler() error { return nil }`
 	assert.False(t, sourceScanIndicatesSideEffect(cmd, dir))
 }
 
-// buildHelpScanFixture writes a tiny shell script that prints the given
-// help text on stdout for any args, builds nothing, and returns its path.
-// helpScanIndicatesSideEffect only cares about CombinedOutput, so a shell
-// stub is enough — no need to compile a Go binary for each fixture.
+// buildHelpScanFixture writes a tiny cross-platform binary that prints the
+// given help text on stdout for any args.
 func buildHelpScanFixture(t *testing.T, helpText string) string {
 	t.Helper()
 	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "fixture-pp-cli")
-	script := "#!/bin/sh\ncat <<'EOF'\n" + helpText + "\nEOF\n"
-	require.NoError(t, os.WriteFile(scriptPath, []byte(script), 0o755))
-	return scriptPath
+	mainFile := filepath.Join(dir, "main.go")
+	writeTestFile(t, mainFile, `package main
+
+import "fmt"
+
+func main() {
+	fmt.Print(`+strconv.Quote(helpText+"\n")+`)
+}
+`)
+	binaryPath := platform.ExecutablePath(filepath.Join(dir, "fixture-pp-cli"))
+	buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
+	out, err := buildCmd.CombinedOutput()
+	require.NoError(t, err, "building help scan fixture: %s", string(out))
+	return binaryPath
 }
 
 func TestIsIntentionalStubExit(t *testing.T) {
@@ -700,13 +710,33 @@ func TestTypedSuccessCodesMalformedAnnotationFallsBackToHelp(t *testing.T) {
 }
 
 func TestIsDocumentedSuccessExit(t *testing.T) {
-	err := exec.Command("sh", "-c", "exit 2").Run()
-	require.Error(t, err)
+	err := runExitCodeFixture(t, 2)
 
 	wrapped := fmt.Errorf("exit %w: no confident match", err)
 	assert.True(t, isDocumentedSuccessExit(wrapped, map[int]bool{0: true, 2: true}))
 	assert.False(t, isDocumentedSuccessExit(wrapped, map[int]bool{0: true}))
 	assert.False(t, isDocumentedSuccessExit(nil, map[int]bool{0: true, 2: true}))
+}
+
+func runExitCodeFixture(t *testing.T, code int) error {
+	t.Helper()
+	dir := t.TempDir()
+	mainFile := filepath.Join(dir, "main.go")
+	writeTestFile(t, mainFile, `package main
+
+import "os"
+
+func main() {
+	os.Exit(`+strconv.Itoa(code)+`)
+}
+`)
+	binaryPath := platform.ExecutablePath(filepath.Join(dir, "exit-code"))
+	buildCmd := exec.Command("go", "build", "-o", binaryPath, mainFile)
+	out, err := buildCmd.CombinedOutput()
+	require.NoError(t, err, "building exit code fixture: %s", string(out))
+	err = exec.Command(binaryPath).Run()
+	require.Error(t, err)
+	return err
 }
 
 func TestEnrichCommandAnnotationsFromSource(t *testing.T) {

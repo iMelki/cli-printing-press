@@ -47,6 +47,9 @@ func TestVerifySkillScriptInSync(t *testing.T) {
 		t.Fatalf("read bundled script %s: %v", bundled, err)
 	}
 
+	canonicalBytes = []byte(strings.ReplaceAll(string(canonicalBytes), "\r\n", "\n"))
+	bundledBytes = []byte(strings.ReplaceAll(string(bundledBytes), "\r\n", "\n"))
+
 	canonicalHash := sha256.Sum256(canonicalBytes)
 	bundledHash := sha256.Sum256(bundledBytes)
 

@@ -3,6 +3,7 @@ package browsersniff
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/spec"
@@ -385,5 +386,7 @@ func TestWriteEnrichedCaptureUsesPrivatePermissions(t *testing.T) {
 
 	info, err := os.Stat(outputPath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }

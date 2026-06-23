@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func localTLSServerClient(server *httptest.Server) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DisableKeepAlives = true
+	// #nosec G402 -- test-only client for local httptest tarball servers.
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	return &http.Client{Transport: transport, Timeout: defaultHTTPTimeout}
+}
+
+func localHTTPServerClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DisableKeepAlives = true
+	return &http.Client{Transport: transport, Timeout: defaultHTTPTimeout}
+}
 
 // buildTarball creates a gzipped tar archive with the given files.
 func buildTarball(t *testing.T, files map[string]string) []byte {
@@ -106,11 +123,7 @@ func downloadsResponse(packages map[string]int) []byte {
 }
 
 func TestNPMSource_Discover(t *testing.T) {
-	t.Parallel()
-
 	t.Run("happy path with endpoints", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 const BASE_URL = "https://api.example.com";
 class Client {
@@ -179,6 +192,7 @@ class Client {
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL:  registryServer.URL,
 			DownloadsBaseURL: downloadsServer.URL,
+			HTTPClient:       localHTTPServerClient(),
 		})
 		// Override HTTPS check for test: use a custom processPackageTarball that
 		// accepts HTTP. We do this by making tarballURL validation accept the
@@ -229,8 +243,6 @@ class Client {
 	})
 
 	t.Run("package date older than 6 months excluded", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Return packages that are all older than 6 months.
 			w.Write(searchResponse(
@@ -245,6 +257,7 @@ class Client {
 
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "old-api")
@@ -255,8 +268,6 @@ class Client {
 	})
 
 	t.Run("npm search returns 0 results", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write(searchResponse()) // empty results
 		}))
@@ -264,6 +275,7 @@ class Client {
 
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "nonexistent-api")
@@ -274,8 +286,6 @@ class Client {
 	})
 
 	t.Run("tarball download fails gracefully", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/-/v1/search":
@@ -297,6 +307,7 @@ class Client {
 
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "broken")
@@ -307,8 +318,6 @@ class Client {
 	})
 
 	t.Run("search API error is non-fatal", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -316,6 +325,7 @@ class Client {
 
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "some-api")
@@ -325,8 +335,6 @@ class Client {
 	})
 
 	t.Run("version metadata 404 skips package", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/-/v1/search":
@@ -345,6 +353,7 @@ class Client {
 
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "missing")
@@ -490,11 +499,7 @@ func TestClassifyPackage(t *testing.T) {
 }
 
 func TestNPMSource_Search(t *testing.T) {
-	t.Parallel()
-
 	t.Run("parses search results", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/-/v1/search", r.URL.Path)
 			assert.Equal(t, "notion", r.URL.Query().Get("text"))
@@ -516,7 +521,7 @@ func TestNPMSource_Search(t *testing.T) {
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		packages, err := src.search(context.Background(), "notion")
 
 		require.NoError(t, err)
@@ -526,14 +531,12 @@ func TestNPMSource_Search(t *testing.T) {
 	})
 
 	t.Run("handles API error", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		_, err := src.search(context.Background(), "test")
 
 		assert.Error(t, err)
@@ -542,11 +545,7 @@ func TestNPMSource_Search(t *testing.T) {
 }
 
 func TestNPMSource_FetchDownloads(t *testing.T) {
-	t.Parallel()
-
 	t.Run("parses bulk downloads", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Contains(t, r.URL.Path, "/downloads/point/last-week/")
 			w.Write(downloadsResponse(map[string]int{
@@ -556,7 +555,7 @@ func TestNPMSource_FetchDownloads(t *testing.T) {
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{DownloadsBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{DownloadsBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		result := src.fetchDownloads(context.Background(), []npmPackageInfo{
 			{Name: "pkg-a"},
 			{Name: "pkg-b"},
@@ -567,14 +566,12 @@ func TestNPMSource_FetchDownloads(t *testing.T) {
 	})
 
 	t.Run("handles API error gracefully", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{DownloadsBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{DownloadsBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		result := src.fetchDownloads(context.Background(), []npmPackageInfo{
 			{Name: "pkg-a"},
 		})
@@ -593,18 +590,14 @@ func TestNPMSource_FetchDownloads(t *testing.T) {
 }
 
 func TestNPMSource_FetchTarballURL(t *testing.T) {
-	t.Parallel()
-
 	t.Run("extracts tarball URL from version metadata", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/example-sdk/1.0.0", r.URL.Path)
 			w.Write(versionResponse("https://registry.npmjs.org/example-sdk/-/example-sdk-1.0.0.tgz"))
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		tarballURL, err := src.fetchTarballURL(context.Background(), "example-sdk", "1.0.0")
 
 		require.NoError(t, err)
@@ -612,14 +605,12 @@ func TestNPMSource_FetchTarballURL(t *testing.T) {
 	})
 
 	t.Run("handles missing tarball URL", func(t *testing.T) {
-		t.Parallel()
-
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte(`{"dist": {}}`))
 		}))
 		defer server.Close()
 
-		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL})
+		src := NewNPMSource(NPMOptions{RegistryBaseURL: server.URL, HTTPClient: localHTTPServerClient()})
 		_, err := src.fetchTarballURL(context.Background(), "bad-pkg", "1.0.0")
 
 		assert.Error(t, err)
@@ -628,11 +619,7 @@ func TestNPMSource_FetchTarballURL(t *testing.T) {
 }
 
 func TestNPMSource_ProcessPackageTarball(t *testing.T) {
-	t.Parallel()
-
 	t.Run("extracts endpoints from tarball", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 const baseUrl = "https://api.test.com";
 class API {
@@ -650,7 +637,7 @@ class API {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		endpoints, baseURLs, _, err := src.processPackageTarball(
@@ -679,8 +666,6 @@ class API {
 	})
 
 	t.Run("rejects non-HTTPS tarball URL", func(t *testing.T) {
-		t.Parallel()
-
 		src := NewNPMSource(NPMOptions{})
 		_, _, _, err := src.processPackageTarball(
 			context.Background(),
@@ -696,8 +681,6 @@ class API {
 	})
 
 	t.Run("skips non-JS/TS files", func(t *testing.T) {
-		t.Parallel()
-
 		tarball := buildTarball(t, map[string]string{
 			"package/readme.md":    `this.get("/v1/docs-only");`,
 			"package/data.json":    `{"url": "/v1/json-data"}`,
@@ -710,7 +693,7 @@ class API {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		endpoints, _, _, err := src.processPackageTarball(
@@ -735,8 +718,6 @@ class API {
 	})
 
 	t.Run("handles tarball with symlinks", func(t *testing.T) {
-		t.Parallel()
-
 		tarball := buildTarballWithSymlink(t)
 
 		tarballServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -745,7 +726,7 @@ class API {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		endpoints, _, _, err := src.processPackageTarball(
@@ -796,11 +777,7 @@ func TestNewNPMSource_CustomOptions(t *testing.T) {
 }
 
 func TestNPMSource_RecencyCutoffFiltering(t *testing.T) {
-	t.Parallel()
-
 	t.Run("custom cutoff of 30 days", func(t *testing.T) {
-		t.Parallel()
-
 		registryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/-/v1/search":
@@ -830,6 +807,7 @@ func TestNPMSource_RecencyCutoffFiltering(t *testing.T) {
 		src := NewNPMSource(NPMOptions{
 			RegistryBaseURL: registryServer.URL,
 			RecencyCutoff:   30 * 24 * time.Hour,
+			HTTPClient:      localHTTPServerClient(),
 		})
 
 		result, err := src.Discover(context.Background(), "test")
@@ -842,11 +820,7 @@ func TestNPMSource_RecencyCutoffFiltering(t *testing.T) {
 }
 
 func TestNPMSource_ProcessPackageTarball_WithParams(t *testing.T) {
-	t.Parallel()
-
 	t.Run("extracts endpoints with params from SDK code", func(t *testing.T) {
-		t.Parallel()
-
 		// Steam-like SDK content that has both endpoint paths and params objects.
 		sdkContent := `
 const BASE_URL = "https://api.steampowered.com";
@@ -878,7 +852,7 @@ class SteamAPI {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		endpoints, baseURLs, _, err := src.processPackageTarball(
@@ -915,8 +889,6 @@ class SteamAPI {
 }
 
 func TestNPMSource_MaxPackagesLimit(t *testing.T) {
-	t.Parallel()
-
 	var versionCallCount int
 
 	// Create 15 recent packages; only 10 should be processed.
@@ -948,6 +920,7 @@ func TestNPMSource_MaxPackagesLimit(t *testing.T) {
 	src := NewNPMSource(NPMOptions{
 		RegistryBaseURL:  registryServer.URL,
 		DownloadsBaseURL: downloadsServer.URL,
+		HTTPClient:       localHTTPServerClient(),
 	})
 
 	_, err := src.Discover(context.Background(), "test")
@@ -1343,11 +1316,7 @@ func TestDeriveEnvVar(t *testing.T) {
 }
 
 func TestProcessPackageTarball_AuthDetection(t *testing.T) {
-	t.Parallel()
-
 	t.Run("detects auth from SDK tarball", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 const baseUrl = "https://api.steampowered.com";
 class SteamAPI {
@@ -1372,7 +1341,7 @@ class SteamAPI {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		_, _, authPatterns, err := src.processPackageTarball(
@@ -1398,8 +1367,6 @@ class SteamAPI {
 	})
 
 	t.Run("no auth from tarball without auth patterns", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 const baseUrl = "https://api.test.com";
 class API {
@@ -1416,7 +1383,7 @@ class API {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		_, _, authPatterns, err := src.processPackageTarball(
@@ -1433,8 +1400,6 @@ class API {
 	})
 
 	t.Run("extracts key URL from README into auth KeyURLHint", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 class SteamAPI {
   constructor(apiKey) { this.apiKey = apiKey; }
@@ -1464,7 +1429,7 @@ Get your API key at https://steamcommunity.com/dev/apikey
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		_, _, authPatterns, err := src.processPackageTarball(
@@ -1482,8 +1447,6 @@ Get your API key at https://steamcommunity.com/dev/apikey
 	})
 
 	t.Run("no README in tarball does not error", func(t *testing.T) {
-		t.Parallel()
-
 		sdkContent := `
 class API {
   request(url) {
@@ -1501,7 +1464,7 @@ class API {
 		defer tarballServer.Close()
 
 		src := NewNPMSource(NPMOptions{
-			HTTPClient: tarballServer.Client(),
+			HTTPClient: localTLSServerClient(tarballServer),
 		})
 
 		_, _, authPatterns, err := src.processPackageTarball(

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/catalog"
@@ -19,12 +20,22 @@ func runWithCapturedStdout(t *testing.T, fn func() error) (string, error) {
 	origStdout := os.Stdout
 	os.Stdout = w
 
+	var wg sync.WaitGroup
+	var out []byte
+	var readErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		out, readErr = io.ReadAll(r)
+	}()
+
 	execErr := fn()
 	w.Close()
 	os.Stdout = origStdout
 
-	out, _ := io.ReadAll(r)
+	wg.Wait()
 	r.Close()
+	require.NoError(t, readErr)
 	return string(out), execErr
 }
 

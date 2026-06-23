@@ -13,6 +13,7 @@ import (
 	"github.com/mvanhorn/cli-printing-press/v4/internal/artifacts"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/govulncheck"
 	"github.com/mvanhorn/cli-printing-press/v4/internal/naming"
+	"github.com/mvanhorn/cli-printing-press/v4/internal/platform"
 )
 
 type validationGate struct {
@@ -22,8 +23,16 @@ type validationGate struct {
 
 const qualityGateTimeout = 5 * time.Minute
 
+type validateOptions struct {
+	SkipGovulncheck bool
+}
+
 func (g *Generator) Validate() error {
-	binPath := filepath.Join(g.OutputDir, naming.ValidationBinary(g.Spec.Name))
+	return g.validate(validateOptions{})
+}
+
+func (g *Generator) validate(opts validateOptions) error {
+	binPath := platform.ExecutablePath(filepath.Join(g.OutputDir, naming.ValidationBinary(g.Spec.Name)))
 	if err := artifacts.CleanupGeneratedCLI(g.OutputDir, artifacts.CleanupOptions{
 		RemoveValidationBinaries: true,
 		RemoveRecursiveCopies:    true,
@@ -96,6 +105,9 @@ func (g *Generator) Validate() error {
 	}
 
 	for _, gate := range gates {
+		if opts.SkipGovulncheck && gate.name == "govulncheck ./..." {
+			continue
+		}
 		if err := gate.run(); err != nil {
 			fmt.Fprintf(os.Stderr, "FAIL %s\n", gate.name)
 			return fmt.Errorf("gate %q failed: %w", gate.name, err)

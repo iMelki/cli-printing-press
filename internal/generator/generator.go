@@ -2673,11 +2673,13 @@ func (g *Generator) renderTemplate(tmplName, outPath string, data any) error {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return fmt.Errorf("executing template %s: %w", tmplName, err)
 	}
-	if err := validateRenderedArtifact(outPath, buf.String()); err != nil {
+	rendered := bytes.ReplaceAll(buf.Bytes(), []byte("\r\n"), []byte("\n"))
+	rendered = bytes.ReplaceAll(rendered, []byte("\r"), []byte("\n"))
+	if err := validateRenderedArtifact(outPath, string(rendered)); err != nil {
 		return err
 	}
 
-	rendered := bytes.TrimRight(buf.Bytes(), " \t\r\n")
+	rendered = bytes.TrimRight(rendered, " \t\r\n")
 	rendered = append(rendered, '\n')
 	return os.WriteFile(fullPath, rendered, 0o644)
 }
