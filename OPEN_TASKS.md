@@ -8,7 +8,7 @@ start from the repo.
 
 | Issue | Status | Scope | Notes |
 | --- | --- | --- | --- |
-| _None_ | - | - | All currently tracked fork stabilization issues are closed. |
+| [#3](https://github.com/iMelki/cli-printing-press/issues/3) | Open | Governance and secrets baseline | Backfills the recurring projects-ops quarterly health findings: CODEOWNERS, issue templates, labels manifest, secrets filter/store, `.git-secrets-ignore`, `.gitattributes filter=secrets`, pre-commit guard, and `.gitignore` coverage for local secrets artifacts. |
 
 ## Recently Completed
 
