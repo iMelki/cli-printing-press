@@ -126,6 +126,43 @@ func TestClientLimitGenerationEmitsHelperAndBuilds(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "limit-truncate-pp-cli")
 	require.NoError(t, New(apiSpec, outputDir).Generate())
 
+	assertClientLimitHelperBuilds(t, outputDir)
+}
+
+func TestClientLimitGenerationNoDataLayerEmitsHelperAndBuilds(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("limit-truncate-nostore")
+	apiSpec.Resources = map[string]spec.Resource{
+		"orders": {
+			Description: "Manage orders",
+			Endpoints: map[string]spec.Endpoint{
+				"list": {
+					Method:      "GET",
+					Path:        "/orders",
+					Description: "List orders",
+					Params: []spec.Param{{
+						Name:    "limit",
+						Type:    "integer",
+						Default: 5,
+					}},
+					Response: spec.ResponseDef{Type: "array", Item: "Order"},
+				},
+			},
+		},
+	}
+
+	outputDir := filepath.Join(t.TempDir(), "limit-truncate-nostore-pp-cli")
+	gen := New(apiSpec, outputDir)
+	gen.VisionSet = VisionTemplateSet{Export: true}
+	require.NoError(t, gen.Generate())
+
+	assertClientLimitHelperBuilds(t, outputDir)
+}
+
+func assertClientLimitHelperBuilds(t *testing.T, outputDir string) {
+	t.Helper()
+
 	helpersSrc, err := os.ReadFile(filepath.Join(outputDir, "internal", "cli", "helpers.go"))
 	require.NoError(t, err)
 	require.Contains(t, string(helpersSrc), "func truncateJSONArray(")
