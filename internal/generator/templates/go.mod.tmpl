@@ -16,7 +16,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 {{- end}}
 	github.com/spf13/cobra v1.9.1
-{{- if .HasHTMLExtraction}}
+{{- if or .HasHTMLExtraction .UsesBrowserHTTPTransport}}
 	golang.org/x/net v0.55.0
 {{- end}}
 {{- if eq .Config.Format "toml"}}
