@@ -4,6 +4,10 @@
 
 ### Fixed
 
+* **fork:** added the report-first upstream sync and `dev -> main` promotion
+  tracking lane in `OPEN_TASKS.md` via
+  [#4](https://github.com/iMelki/cli-printing-press/issues/4), keeping the
+  large upstream divergence separate from ad hoc branch consolidation.
 * **cli:** stabilized the Windows full test suite after the fork patchset
   build repair. Generated/test helper binaries now build to platform executable
   paths before execution, local npm HTTP fixtures avoid fragile parallel socket

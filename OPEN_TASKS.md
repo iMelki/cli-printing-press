@@ -8,6 +8,7 @@ start from the repo.
 
 | Issue | Status | Scope | Notes |
 | --- | --- | --- | --- |
+| [#4](https://github.com/iMelki/cli-printing-press/issues/4) | Open | Upstream sync and dev-to-main promotion | Plan a safe report-first sync from `mvanhorn/cli-printing-press`, trial integration away from active `dev`, preserve fork governance work, then produce a reviewed `dev -> main` promotion brief. |
 | [#3](https://github.com/iMelki/cli-printing-press/issues/3) | Open | Governance and secrets baseline | Backfills the recurring projects-ops quarterly health findings: CODEOWNERS, issue templates, labels manifest, secrets filter/store, `.git-secrets-ignore`, `.gitattributes filter=secrets`, pre-commit guard, and `.gitignore` coverage for local secrets artifacts. |
 
 ## Recently Completed
