@@ -2453,13 +2453,6 @@ func wrapWithProvenance(data json.RawMessage, prov DataProvenance) (json.RawMess
 	return json.Marshal(envelope)
 }
 
-// defaultDBPath returns the canonical path for the local SQLite database.
-func defaultDBPath(name string) string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", name, "data.db")
-}
-{{- end}}
-
 {{- if .HasClientLimit}}
 
 // truncateJSONArray returns a JSON array containing at most n elements
