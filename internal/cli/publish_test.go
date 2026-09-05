@@ -24,6 +24,9 @@ import (
 // (CI sandboxes, devcontainers, some cloud runners).
 func skipIfRootCannotSimulateUnreadable(t *testing.T) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows chmod does not reliably make files unreadable for the current user")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root; chmod 0 does not block reads — cannot simulate an unreadable-file failure")
 	}

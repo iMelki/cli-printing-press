@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/generator"
+	"github.com/mvanhorn/cli-printing-press/v4/internal/platform"
 	"github.com/stretchr/testify/require"
 )
 
@@ -903,7 +904,7 @@ func writeVerifySkillFixture(t *testing.T, dir string, files map[string]string, 
 // TempDir is fresh; Go's test cache ensures the compile is fast.
 func buildPrintingPressBinary(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "printing-press")
+	out := platform.ExecutablePath(filepath.Join(t.TempDir(), "printing-press"))
 	cmd := exec.Command("go", "build", "-o", out, "./cmd/cli-printing-press")
 	// The test runs from internal/cli; go up to repo root.
 	cmd.Dir = "../.."

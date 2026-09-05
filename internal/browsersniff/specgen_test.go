@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1383,7 +1384,9 @@ func TestWriteEnrichedCaptureUsesPrivatePermissions(t *testing.T) {
 
 	info, err := os.Stat(outputPath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 func findBodyParam(params []spec.Param, name string) *spec.Param {

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1183,9 +1184,7 @@ func TestRunOneFeatureCheck_WarnsOnEntityButStaysPass(t *testing.T) {
 	// Integration: a feature whose output is valid but contains a raw
 	// numeric entity should still Pass (pass-rate unaffected) but carry
 	// a warning in the result.
-	binary := buildFakeCLI(t, `#!/usr/bin/env bash
-printf 'The Food Lab&#39;\''s Chocolate Chip Cookies\n'
-`)
+	binary := buildOutputCLI(t, "The Food Lab&#39;s Chocolate Chip Cookies\n")
 	feature := NovelFeature{
 		Name:    "goat",
 		Command: "goat",
@@ -1197,11 +1196,34 @@ printf 'The Food Lab&#39;\''s Chocolate Chip Cookies\n'
 	require.Contains(t, result.Warnings[0], "raw HTML entity")
 }
 
-// buildFakeCLI writes a shell script to a temp file and returns its path.
-// Used by entity tests to exercise runOneFeatureCheck end-to-end without
-// depending on a real generated CLI binary.
+// buildOutputCLI writes a tiny cross-platform binary that prints output for
+// any invocation. It keeps runOneFeatureCheck covered on Windows, where shell
+// script stubs are not executable.
+func buildOutputCLI(t *testing.T, output string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "fake-cli.cmd")
+		encoded := base64.StdEncoding.EncodeToString([]byte(output))
+		script := "@echo off\r\npowershell -NoProfile -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; [Console]::Out.Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "')))\"\r\n"
+		require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+		return path
+	}
+
+	path := filepath.Join(dir, "fake-cli")
+	script := "#!/bin/sh\ncat <<'EOF'\n" + output + "EOF\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
+}
+
+// buildFakeCLI writes a caller-supplied shell script stub. Tests that need
+// non-zero exits or stderr-only output still use this; it is not portable to
+// Windows, so callers skip there.
 func buildFakeCLI(t *testing.T, script string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script CLI stubs are not executable on Windows")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fake-cli")
 	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
@@ -1212,9 +1234,7 @@ func TestRunOneFeatureCheck_PopulatesOutputSample(t *testing.T) {
 	// Phase 4.85's agentic reviewer needs the captured stdout to judge
 	// output plausibility without re-invoking the binary. OutputSample
 	// must be populated on pass results.
-	binary := buildFakeCLI(t, `#!/usr/bin/env bash
-printf 'Hello cookie world\n'
-`)
+	binary := buildOutputCLI(t, "Hello cookie world\n")
 	feature := NovelFeature{
 		Name:    "demo",
 		Command: "demo",

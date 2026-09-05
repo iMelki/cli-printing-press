@@ -164,6 +164,13 @@ func TestSessionHandshakeBrowserTransportSharesJar(t *testing.T) {
 			t.Errorf("client.go missing expected substring %q", want)
 		}
 	}
+	goModContent, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(goModContent), "golang.org/x/net v0.55.0") {
+		t.Error("browser transport go.mod must pin golang.org/x/net >= v0.55.0 so govulncheck does not fail on stale transitive idna")
+	}
 	if !strings.Contains(string(sessionContent), "func (m *SessionManager) CookieJar() http.CookieJar") {
 		t.Error("session.go missing CookieJar accessor")
 	}
