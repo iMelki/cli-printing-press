@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"sync"
 	"testing"
 
 	"github.com/mvanhorn/cli-printing-press/v4/internal/catalog"
@@ -13,6 +12,11 @@ import (
 )
 
 // runWithCapturedStdout executes fn while capturing os.Stdout via a pipe.
+//
+// The pipe is drained by a background goroutine that starts before fn runs, so
+// fn never blocks on a full OS pipe buffer. Draining only after fn returned
+// would deadlock once fn writes more than the buffer holds (notably smaller on
+// Windows), so the reader must run concurrently with the writer.
 func runWithCapturedStdout(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -20,23 +24,29 @@ func runWithCapturedStdout(t *testing.T, fn func() error) (string, error) {
 	origStdout := os.Stdout
 	os.Stdout = w
 
-	var wg sync.WaitGroup
-	var out []byte
-	var readErr error
-	wg.Add(1)
+	outCh := make(chan string, 1)
 	go func() {
-		defer wg.Done()
-		out, readErr = io.ReadAll(r)
+		defer r.Close()
+		out, _ := io.ReadAll(r)
+		outCh <- string(out)
 	}()
 
-	execErr := fn()
-	w.Close()
-	os.Stdout = origStdout
+	stdoutRestored := false
+	restoreStdout := func() {
+		if stdoutRestored {
+			return
+		}
+		w.Close()
+		os.Stdout = origStdout
+		stdoutRestored = true
+	}
+	defer restoreStdout()
 
-	wg.Wait()
-	r.Close()
-	require.NoError(t, readErr)
-	return string(out), execErr
+	execErr := fn()
+	restoreStdout()
+
+	out := <-outCh
+	return out, execErr
 }
 
 func captureStdout(t *testing.T, fn func()) string {
@@ -47,6 +57,27 @@ func captureStdout(t *testing.T, fn func()) string {
 	})
 	require.NoError(t, err)
 	return out
+}
+
+func TestRunWithCapturedStdoutRestoresStdoutAfterPanic(t *testing.T) {
+	origStdout := os.Stdout
+	var didPanic bool
+	var restored bool
+
+	func() {
+		defer func() {
+			didPanic = recover() != nil
+			restored = os.Stdout == origStdout
+			os.Stdout = origStdout
+		}()
+
+		_, _ = runWithCapturedStdout(t, func() error {
+			panic("boom")
+		})
+	}()
+
+	require.True(t, didPanic)
+	assert.True(t, restored, "stdout should be restored while unwinding a panic")
 }
 
 func TestCatalogListJSON(t *testing.T) {
@@ -114,6 +145,54 @@ func TestCatalogSearchAuth(t *testing.T) {
 	assert.True(t, found, "stytch should appear in auth search results")
 }
 
+func TestCatalogSearchMatchesRegionAndAPILanguage(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry catalog.Entry
+		query string
+	}{
+		{
+			name:  "region",
+			entry: catalog.Entry{Name: "alpha", DisplayName: "Alpha", Description: "First", Category: "maps", Regions: []string{"NL"}},
+			query: "nl",
+		},
+		{
+			name:  "api language",
+			entry: catalog.Entry{Name: "beta", DisplayName: "Beta", Description: "Second", Category: "maps", APILanguage: "da-DK"},
+			query: "da-dk",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.True(t, matchesCatalogQuery(tt.entry, tt.query))
+		})
+	}
+}
+
+func TestFilterCatalogEntriesByRegion(t *testing.T) {
+	entries := []catalog.Entry{
+		{Name: "global", Regions: []string{"*"}},
+		{Name: "netherlands", Regions: []string{"NL"}},
+		{Name: "india", Regions: []string{"IN"}},
+		{Name: "unknown"},
+	}
+
+	got := filterCatalogEntriesByRegion(entries, "nl")
+
+	require.Len(t, got, 2)
+	assert.Equal(t, "global", got[0].Name)
+	assert.Equal(t, "netherlands", got[1].Name)
+}
+
+func TestCatalogListRejectsInvalidRegionFilter(t *testing.T) {
+	cmd := newCatalogCmd()
+	cmd.SetArgs([]string{"list", "--region", "netherlands"})
+
+	_, err := runWithCapturedStdout(t, cmd.Execute)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--region must be a two-letter region token")
+}
+
 func TestCatalogSearchNoMatches(t *testing.T) {
 	cmd := newCatalogCmd()
 	cmd.SetArgs([]string{"search", "zzz-nonexistent-query-xyz", "--json"})
@@ -160,4 +239,24 @@ func TestCatalogShowStripePlainText(t *testing.T) {
 
 	assert.Contains(t, output, "Stripe")
 	assert.Contains(t, output, "Spec URL:")
+}
+
+func TestCatalogShowPlainTextIncludesRegionMetadata(t *testing.T) {
+	output := captureStdout(t, func() {
+		entry := catalog.Entry{
+			Name:        "pdok-location",
+			DisplayName: "PDOK Location",
+			Description: "Geocoding for Dutch addresses",
+			Category:    "maps",
+			Tier:        "official",
+			SpecURL:     "https://example.com/openapi.yaml",
+			SpecFormat:  "yaml",
+			Regions:     []string{"NL"},
+			APILanguage: "nl",
+		}
+		printCatalogEntryPlainText(entry)
+	})
+
+	assert.Contains(t, output, "Regions:        NL")
+	assert.Contains(t, output, "API Language:   nl")
 }

@@ -50,6 +50,7 @@ func TestGenerateFormRequestBodyUsesFormClient(t *testing.T) {
 					RequestContentType: "application/x-www-form-urlencoded",
 					Body: []spec.Param{
 						{Name: "struct_data", Type: "string", Format: "json", Required: true, Description: "JSON-encoded query payload"},
+						{Name: "facets", Type: "array", Description: "Facet filters"},
 					},
 				},
 			},
@@ -60,8 +61,8 @@ func TestGenerateFormRequestBodyUsesFormClient(t *testing.T) {
 	require.NoError(t, New(apiSpec, outputDir).Generate())
 
 	clientSrc := readGeneratedFile(t, outputDir, "internal", "client", "client.go")
-	assert.Contains(t, clientSrc, `func (c *Client) PostForm(path string, fields url.Values) (json.RawMessage, int, error)`)
-	assert.Contains(t, clientSrc, `func (c *Client) PostFormWithHeaders(path string, fields url.Values, headers map[string]string) (json.RawMessage, int, error)`)
+	assert.Contains(t, clientSrc, `func (c *Client) PostForm(ctx context.Context, path string, fields url.Values) (json.RawMessage, int, error)`)
+	assert.Contains(t, clientSrc, `func (c *Client) PostFormWithHeaders(ctx context.Context, path string, fields url.Values, headers map[string]string) (json.RawMessage, int, error)`)
 	assert.Contains(t, clientSrc, `type formRequestBody struct {`)
 	assert.Contains(t, clientSrc, `func encodeFormBody(body formRequestBody) ([]byte, string, error)`)
 	assert.Contains(t, clientSrc, `body.Fields.Encode()`)
@@ -72,7 +73,7 @@ func TestGenerateFormRequestBodyUsesFormClient(t *testing.T) {
 	assert.Contains(t, endpointSrc, `fields := url.Values{}`)
 	assert.Contains(t, endpointSrc, `fields.Set("grant_type", bodyGrantType)`)
 	assert.Contains(t, endpointSrc, `fields.Set("client_id", bodyClientId)`)
-	assert.Contains(t, endpointSrc, `c.PostForm(path, fields)`)
+	assert.Contains(t, endpointSrc, `c.PostFormWithParams(cmd.Context(), path, params, fields)`)
 	assert.NotContains(t, endpointSrc, `var stdinBody bool`)
 	assert.NotContains(t, endpointSrc, `c.Post(path, body)`)
 	// Required-flag check should fire at top-level, not inside `if !stdinBody`.
@@ -84,12 +85,21 @@ func TestGenerateFormRequestBodyUsesFormClient(t *testing.T) {
 	venuesSrc := readGeneratedFile(t, outputDir, "internal", "cli", "promoted_venues.go")
 	assert.Contains(t, venuesSrc, `if !json.Valid([]byte(bodyStructData))`)
 	assert.Contains(t, venuesSrc, `fields.Set("struct_data", bodyStructData)`)
-	assert.Contains(t, venuesSrc, `c.PostForm(path, fields)`)
+	assert.Contains(t, venuesSrc, `c.PostFormWithParams(cmd.Context(), path, params, fields)`)
 
 	mcpSrc := readGeneratedFile(t, outputDir, "internal", "mcp", "tools.go")
 	assert.Contains(t, mcpSrc, `RequestContentType: "application/x-www-form-urlencoded"`)
 	assert.Contains(t, mcpSrc, `formFields := url.Values{}`)
-	assert.Contains(t, mcpSrc, `data, _, err = c.PostForm(path, formFields)`)
+	assert.Contains(t, mcpSrc, `data, _, err = c.PostFormWithParams(ctx, path, params, formFields)`)
+
+	// An array/object body param binds to its native JSON type even on an
+	// x-www-form-urlencoded endpoint (not WithString), then flows through
+	// mcpFormFieldValue, which JSON-encodes a native composite rather than
+	// rendering it with Go's "%v". This is the form twin of the multipart path
+	// and locks it against a future helper refactor silently re-breaking it.
+	assert.Contains(t, mcpSrc, `mcplib.WithArray("facets"`)
+	assert.Contains(t, mcpSrc, `formFields.Set(binding.WireName, mcpFormFieldValue(v))`)
+	assert.Regexp(t, `(?s)func mcpFormFieldValue\(v any\) string \{.*?json\.Marshal\(v\)`, mcpSrc)
 
 	runGoCommand(t, outputDir, "mod", "tidy")
 	runGoCommand(t, outputDir, "build", "./...")

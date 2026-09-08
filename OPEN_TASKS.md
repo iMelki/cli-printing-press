@@ -16,5 +16,16 @@ start from the repo.
 | Issue | Result |
 | --- | --- |
 | [#2](https://github.com/iMelki/cli-printing-press/issues/2) | Stabilized the Windows full test suite after the patchset build repair. The fork now passes `go test -p 1 -count=1 -timeout 300s ./...` on Windows, with generated/test helper binaries built to platform executable paths, local HTTP fixture tests hardened, chmod-only permission tests skipped where Windows cannot simulate them, and govulncheck/race-detector checks made deterministic for this environment. |
-| [#1](https://github.com/iMelki/cli-printing-press/issues/1) | Restored buildability after deciding the zero-byte tracked source/test/template files were corrupted preservation artifacts. Existing files were restored from the clean base, new empty placeholders were removed, `go test -run '^$' ./...` passes, and `go build ./cmd/printing-press` passes. |
+| [#1](https://github.com/iMelki/cli-printing-press/issues/1) | Restored buildability after deciding the zero-byte tracked source/test/template files were corrupted preservation artifacts. Existing files were restored from the clean base, new empty placeholders were removed, `go test -run '^$' ./...` passes, and `go build ./cmd/cli-printing-press` passes. |
 | Local adoption | Forked `mvanhorn/cli-printing-press` into `iMelki/cli-printing-press`, set local `origin` to the fork, disabled upstream pushes, and preserved the prior dirty patchset on `dev` in commit `a5c34bd4`. |
+
+## Historical fork reconciliation
+
+The original seven-commit fork lane is retained as merge ancestry. Its unique
+[force-regeneration plan](docs/archive/plans/2026-05-10-force-regen-preservation.md)
+is archived with [per-commit provenance](docs/archive/printing-press-branch-reconciliation-2026-09-08.md).
+Current generator behavior follows the newer replayed and upstream fixes; the
+old plan does not reopen historical implementation tasks. Issue
+[#4](https://github.com/iMelki/cli-printing-press/issues/4) remains the tracking
+record for upstream alignment and any separately requested dev-to-main promotion.
+This reconciliation does not promote main.

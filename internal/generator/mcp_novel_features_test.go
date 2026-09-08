@@ -55,17 +55,20 @@ func TestMCPRegistersCobraTreeMirror(t *testing.T) {
 
 	cobratreeCLIPath, err := os.ReadFile(filepath.Join(outputDir, "internal", "mcp", "cobratree", "cli_path.go"))
 	require.NoError(t, err)
-	assert.Contains(t, string(cobratreeCLIPath), `const cliName = "noveltest-pp-cli"`)
+	assert.Contains(t, string(cobratreeCLIPath), `cliExecutableName(runtime.GOOS)`)
 	assert.Contains(t, string(cobratreeCLIPath), `os.Getenv("NOVELTEST_CLI_PATH")`)
 
 	cobratreeShellout, err := os.ReadFile(filepath.Join(outputDir, "internal", "mcp", "cobratree", "shellout.go"))
 	require.NoError(t, err)
 	assert.Contains(t, string(cobratreeShellout), "func shellOutToCLI(")
-	assert.Contains(t, string(cobratreeShellout), "func splitShellArgs(s string)")
+	assert.Contains(t, string(cobratreeShellout), "func SplitShellArgs(s string)")
 
 	root, err := os.ReadFile(filepath.Join(outputDir, "internal", "cli", "root.go"))
 	require.NoError(t, err)
 	assert.Contains(t, string(root), "func RootCmd() *cobra.Command")
+
+	runGoCommand(t, outputDir, "mod", "tidy")
+	runGoCommand(t, outputDir, "test", "./internal/mcp/cobratree", "-run", "TestSplitShellArgs")
 
 	// main.go calls only RegisterTools; RegisterTools owns endpoint tools and
 	// the runtime command mirror.
@@ -140,6 +143,139 @@ func TestToolNameForPathCases(t *testing.T) {
 }
 `)
 	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "internal", "mcp", "cobratree", "names_extra_test.go"), []byte(testSrc.String()), 0o644))
+
+	runGoCommandRequired(t, outputDir, "test", "./internal/mcp/cobratree")
+}
+
+func TestMCPFrameworkCommandClassificationIsTopLevelOnly(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("depthcheck")
+	outputDir := filepath.Join(t.TempDir(), "depthcheck-pp-cli")
+	gen := New(apiSpec, outputDir)
+	require.NoError(t, gen.Generate())
+
+	var testSrc strings.Builder
+	testSrc.WriteString(`package cobratree
+
+import (
+	"testing"
+
+	"github.com/spf13/cobra"
+)
+
+func TestFrameworkCommandClassificationIsTopLevelOnly(t *testing.T) {
+	for name := range frameworkCommands {
+		root := &cobra.Command{Use: "depthcheck-pp-cli"}
+		top := &cobra.Command{
+			Use: name,
+			RunE: func(cmd *cobra.Command, args []string) error { return nil },
+		}
+		parent := &cobra.Command{Use: "items"}
+		nested := &cobra.Command{
+			Use: name,
+			RunE: func(cmd *cobra.Command, args []string) error { return nil },
+		}
+		parent.AddCommand(nested)
+		root.AddCommand(top, parent)
+
+		if got := classify(top); got != commandFramework {
+			t.Fatalf("top-level %s classify() = %v, want commandFramework", name, got)
+		}
+		if got := classify(nested); got != commandNovel {
+			t.Fatalf("nested items %s classify() = %v, want commandNovel", name, got)
+		}
+	}
+
+	root := &cobra.Command{Use: "depthcheck-pp-cli"}
+	topSearch := &cobra.Command{
+		Use: "search",
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
+	}
+	items := &cobra.Command{Use: "items"}
+	itemSearch := &cobra.Command{
+		Use: "search",
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
+	}
+	items.AddCommand(itemSearch)
+	root.AddCommand(topSearch, items)
+
+	if got := classify(topSearch); got != commandFramework {
+		t.Fatalf("top-level search classify() = %v, want commandFramework", got)
+	}
+	if got := classify(itemSearch); got != commandNovel {
+		t.Fatalf("nested items search classify() = %v, want commandNovel", got)
+	}
+	var mirrored []string
+	walk(root, nil, func(cmd *cobra.Command, path []string) {
+		if classify(cmd) == commandNovel && cmd.Runnable() {
+			mirrored = append(mirrored, toolNameForPath(path))
+		}
+	})
+	if got := toolNameForPath([]string{"items", "search"}); got != "items_search" {
+		t.Fatalf("nested search tool name = %q, want items_search", got)
+	}
+	if len(mirrored) != 1 || mirrored[0] != "items_search" {
+		t.Fatalf("mirrored tools = %v, want only items_search", mirrored)
+	}
+}
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "internal", "mcp", "cobratree", "framework_depth_test.go"), []byte(testSrc.String()), 0o644))
+
+	runGoCommandRequired(t, outputDir, "test", "./internal/mcp/cobratree")
+}
+
+func TestMCPCobraTreeSiblingCLIPathUsesWindowsExecutableSuffix(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("pathcheck")
+	outputDir := filepath.Join(t.TempDir(), "pathcheck-pp-cli")
+	gen := New(apiSpec, outputDir)
+	require.NoError(t, gen.Generate())
+
+	var testSrc strings.Builder
+	testSrc.WriteString(`package cobratree
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestCLIExecutableNameUsesWindowsSuffix(t *testing.T) {
+	if got := cliExecutableName("windows"); got != "pathcheck-pp-cli.exe" {
+		t.Fatalf("cliExecutableName(windows) = %q, want pathcheck-pp-cli.exe", got)
+	}
+	if got := cliExecutableName("linux"); got != "pathcheck-pp-cli" {
+		t.Fatalf("cliExecutableName(linux) = %q, want pathcheck-pp-cli", got)
+	}
+	if got := cliExecutableName("darwin"); got != "pathcheck-pp-cli" {
+		t.Fatalf("cliExecutableName(darwin) = %q, want pathcheck-pp-cli", got)
+	}
+}
+
+func TestSiblingCLICandidatesUseWindowsSuffixThenFallback(t *testing.T) {
+	exePath := filepath.Join("tmp", "bin", "pathcheck-pp-mcp.exe")
+	windowsCandidates := siblingCLICandidates("windows", exePath)
+	if len(windowsCandidates) != 2 {
+		t.Fatalf("windows candidates length = %d, want 2: %#v", len(windowsCandidates), windowsCandidates)
+	}
+	if got, want := filepath.Base(windowsCandidates[0]), "pathcheck-pp-cli.exe"; got != want {
+		t.Fatalf("windows candidates[0] = %q, want %q", got, want)
+	}
+	if got, want := filepath.Base(windowsCandidates[1]), "pathcheck-pp-cli"; got != want {
+		t.Fatalf("windows candidates[1] = %q, want %q", got, want)
+	}
+
+	linuxCandidates := siblingCLICandidates("linux", filepath.Join("tmp", "bin", "pathcheck-pp-mcp"))
+	if len(linuxCandidates) != 1 {
+		t.Fatalf("linux candidates length = %d, want 1: %#v", len(linuxCandidates), linuxCandidates)
+	}
+	if got, want := filepath.Base(linuxCandidates[0]), "pathcheck-pp-cli"; got != want {
+		t.Fatalf("linux candidates[0] = %q, want %q", got, want)
+	}
+}
+`)
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "internal", "mcp", "cobratree", "cli_path_extra_test.go"), []byte(testSrc.String()), 0o644))
 
 	runGoCommandRequired(t, outputDir, "test", "./internal/mcp/cobratree")
 }

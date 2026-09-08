@@ -82,6 +82,101 @@ func TestFindVendorPrefixSecretsIgnoresPlaceholdersAndBinaryFiles(t *testing.T) 
 	require.Empty(t, findings)
 }
 
+func TestFindVendorPrefixSecretsDetectsMailchimpLinearAndAnthropic(t *testing.T) {
+	root := t.TempDir()
+	// Build the secret-shaped fixtures from fragments via testSecret so the
+	// recognizable vendor prefix never appears contiguously in this source
+	// file — otherwise GitHub push protection rejects the push of the very
+	// test that exercises this scanner.
+	mailchimpKey := testSecret("0123456789abcdef0123456789abcdef", "-us6")
+	linearKey := testSecret("lin_", "api_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcd")
+	anthropicKey := testSecret("sk-ant-", "api03-", "abcdefghijklmnopqrstuvwxyz0123456789ABCD")
+	require.NoError(t, os.WriteFile(filepath.Join(root, "mailchimp.txt"), []byte("key="+mailchimpKey+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "linear.txt"), []byte("token="+linearKey+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "anthropic.txt"), []byte("auth="+anthropicKey+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "not-a-key.txt"), []byte("candidate="+testSecret("0123456789abcdef0123456789abcdeg", "-us6")+"\n"), 0o644))
+	// Boundary negatives: payloads one char short of the {40,} minimum must
+	// NOT match, so a regression that loosened the quantifier is caught.
+	linearShort := testSecret("lin_", "api_", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789012")         // 39-char body
+	anthropicShort := testSecret("sk-ant-", "api03-", "abcdefghijklmnopqrstuvwxyz0123456789ABC") // 39-char body
+	require.NoError(t, os.WriteFile(filepath.Join(root, "linear-short.txt"), []byte("token="+linearShort+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "anthropic-short.txt"), []byte("auth="+anthropicShort+"\n"), 0o644))
+
+	findings, err := FindVendorPrefixSecrets(root)
+	require.NoError(t, err)
+	require.Len(t, findings, 3)
+
+	byPath := map[string]VendorPrefixSecretFinding{}
+	for _, finding := range findings {
+		byPath[finding.Path] = finding
+	}
+	require.Equal(t, "mailchimp-api-key", byPath["mailchimp.txt"].Kind)
+	require.Equal(t, "linear-api-key", byPath["linear.txt"].Kind)
+	require.Equal(t, "anthropic-api-key", byPath["anthropic.txt"].Kind)
+	_, flagged := byPath["not-a-key.txt"]
+	require.False(t, flagged)
+	_, linearShortFlagged := byPath["linear-short.txt"]
+	require.False(t, linearShortFlagged, "linear payload one char short of 40 must not match")
+	_, anthropicShortFlagged := byPath["anthropic-short.txt"]
+	require.False(t, anthropicShortFlagged, "anthropic payload one char short of 40 must not match")
+}
+
+func TestFindSpecDeclaredCookieSecretsReportsCookieNameOnly(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("Cookie:session-id=actuallyrealcookievaluexyz; x-main=your-cookie-here; y-main=not-an-example-real-value\n"), 0o644))
+
+	findings, err := FindSpecDeclaredCookieSecrets(root, []string{"session-id", "x-main", "y-main"})
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+	byKind := map[string]VendorPrefixSecretFinding{}
+	for _, finding := range findings {
+		byKind[finding.Kind] = finding
+	}
+	require.Equal(t, "README.md", byKind["cookie-value:session-id"].Path)
+	require.Equal(t, 1, byKind["cookie-value:session-id"].Line)
+	require.Equal(t, "README.md", byKind["cookie-value:y-main"].Path)
+	require.Equal(t, 1, byKind["cookie-value:y-main"].Line)
+}
+
+func TestFindSpecDeclaredCookieSecretsReportsStructuredNameValueCookies(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cookies.json"), []byte(`{"name":"session-id","value":"actuallyrealcookievaluexyz"}`+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cookies-reversed.json"), []byte(`{"value":"anotherrealcookievaluexyz","name":"x-main"}`+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cookies-pretty.json"), []byte("{\n  \"name\": \"y-main\",\n  \"value\": \"prettyrealcookievaluexyz\"\n}\n"), 0o644))
+
+	findings, err := FindSpecDeclaredCookieSecrets(root, []string{"session-id", "x-main", "y-main"})
+	require.NoError(t, err)
+	require.Len(t, findings, 3)
+	byKind := map[string]VendorPrefixSecretFinding{}
+	for _, finding := range findings {
+		byKind[finding.Kind] = finding
+	}
+	require.Equal(t, "cookies.json", byKind["cookie-value:session-id"].Path)
+	require.Equal(t, 1, byKind["cookie-value:session-id"].Line)
+	require.Equal(t, "cookies-reversed.json", byKind["cookie-value:x-main"].Path)
+	require.Equal(t, 1, byKind["cookie-value:x-main"].Line)
+	require.Equal(t, "cookies-pretty.json", byKind["cookie-value:y-main"].Path)
+	require.Equal(t, 3, byKind["cookie-value:y-main"].Line)
+}
+
+func TestFindPackageSecretsCombinesVendorPrefixAndDeclaredCookies(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("Cookie: session-id=actuallyrealcookievaluexyz\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "spec.json"), []byte("\"token\":\""+testSecret("sk", "-or-v1-", "abcdefghijklmnopqrstuvwxyz1234567890")+"\"\n"), 0o644))
+
+	findings, err := FindPackageSecrets(root, []string{"session-id"})
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+	byKind := map[string]VendorPrefixSecretFinding{}
+	for _, finding := range findings {
+		byKind[finding.Kind] = finding
+	}
+	require.Equal(t, "README.md", byKind["cookie-value:session-id"].Path)
+	require.Equal(t, 1, byKind["cookie-value:session-id"].Line)
+	require.Equal(t, "spec.json", byKind["openrouter-api-key"].Path)
+	require.Equal(t, 1, byKind["openrouter-api-key"].Line)
+}
+
 func testSecret(parts ...string) string {
 	return strings.Join(parts, "")
 }

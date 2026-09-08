@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,6 +35,28 @@ func TestBodyMap(t *testing.T) {
 			indent: "\t\t\t",
 			want: "\t\t\tif bodyCount != 0 {\n" +
 				"\t\t\t\tbody[\"count\"] = bodyCount\n" +
+				"\t\t\t}\n",
+		},
+		{
+			// Booleans gate on cmd.Flags().Changed instead of the
+			// scalar zero-guard so user-set false reaches the wire
+			// AND untouched flags don't overwrite server state on
+			// PATCH endpoints. See issue #1298.
+			name:   "scalar boolean (internal spec form) gates on Changed, not zero-guard",
+			body:   []spec.Param{{Name: "private", Type: "boolean"}},
+			indent: "\t\t\t",
+			want: "\t\t\tif cmd.Flags().Changed(\"private\") {\n" +
+				"\t\t\t\tbody[\"private\"] = bodyPrivate\n" +
+				"\t\t\t}\n",
+		},
+		{
+			// The OpenAPI parser normalizes "boolean" -> "bool", so the
+			// renderer must match both forms or fail open on OpenAPI specs.
+			name:   "scalar bool (OpenAPI-normalized form) gates on Changed",
+			body:   []spec.Param{{Name: "enabled", Type: "bool"}},
+			indent: "\t\t\t",
+			want: "\t\t\tif cmd.Flags().Changed(\"enabled\") {\n" +
+				"\t\t\t\tbody[\"enabled\"] = bodyEnabled\n" +
 				"\t\t\t}\n",
 		},
 		{
@@ -95,6 +118,22 @@ func TestBodyMap(t *testing.T) {
 				"\t}\n",
 		},
 		{
+			// Required bools without a default are string-backed so the
+			// CLI can distinguish omitted from explicit false. The body-map
+			// block must parse the string back to bool before storing so
+			// json.Marshal emits {"all_day":false}, not {"all_day":"false"}.
+			name:   "required bool without default parses string-backed flag",
+			body:   []spec.Param{{Name: "all_day", Type: "boolean", Required: true}},
+			indent: "\t\t\t",
+			want: "\t\t\tif bodyAllDay != \"\" {\n" +
+				"\t\t\t\tparsedAllDay, err := strconv.ParseBool(bodyAllDay)\n" +
+				"\t\t\t\tif err != nil {\n" +
+				"\t\t\t\t\treturn fmt.Errorf(\"parsing --all-day as bool: %w\", err)\n" +
+				"\t\t\t\t}\n" +
+				"\t\t\t\tbody[\"all_day\"] = parsedAllDay\n" +
+				"\t\t\t}\n",
+		},
+		{
 			name:   "empty body produces empty string",
 			body:   nil,
 			indent: "\t\t\t",
@@ -144,6 +183,20 @@ func TestBodyMap_IdentName(t *testing.T) {
 	}
 }
 
+func TestBodyMap_BodyNameOverridesJSONKey(t *testing.T) {
+	t.Parallel()
+	got := bodyMap([]spec.Param{{Name: "startAfter", BodyName: "searchAfter", Type: "array"}}, "\t")
+	if !strings.Contains(got, "bodyStartAfter") {
+		t.Errorf("expected public name to drive variable identity, got: %s", got)
+	}
+	if !strings.Contains(got, `body["searchAfter"] = parsedStartAfter`) {
+		t.Errorf("expected body_name to drive JSON key, got: %s", got)
+	}
+	if strings.Contains(got, `body["startAfter"]`) {
+		t.Errorf("public name must not leak as JSON key when body_name is set, got: %s", got)
+	}
+}
+
 // TestBodyMap_NestedObject verifies that body params declaring
 // type=object with non-empty Fields render a nested-map block in
 // place of the JSON-string parse path. The wire key is the parent's
@@ -174,6 +227,35 @@ func TestBodyMap_NestedObject(t *testing.T) {
 		"\t}\n"
 	if got != want {
 		t.Errorf("bodyMap nested mismatch.\n got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestBodyMap_NestedObject_BooleanLeaf verifies the boolean Changed
+// gate threads through the nested-object recursion: an untouched
+// boolean leaf adds nothing to the inner map, so len(nestedMap) > 0
+// stays false and the parent object key is not emitted. Without this,
+// every PATCH whose body declares a nested object with a boolean leaf
+// would silently send the parent with field=false on every call.
+func TestBodyMap_NestedObject_BooleanLeaf(t *testing.T) {
+	t.Parallel()
+	got := bodyMap([]spec.Param{{
+		Name: "settings",
+		Type: "object",
+		Fields: []spec.Param{
+			{Name: "private", Type: "boolean"},
+		},
+	}}, "\t")
+	want := "\t{\n" +
+		"\t\tnestedSettings := map[string]any{}\n" +
+		"\t\tif cmd.Flags().Changed(\"settings-private\") {\n" +
+		"\t\t\tnestedSettings[\"private\"] = bodySettingsPrivate\n" +
+		"\t\t}\n" +
+		"\t\tif len(nestedSettings) > 0 {\n" +
+		"\t\t\tbody[\"settings\"] = nestedSettings\n" +
+		"\t\t}\n" +
+		"\t}\n"
+	if got != want {
+		t.Errorf("bodyMap nested boolean leaf mismatch.\n got:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -440,5 +522,396 @@ func TestBodyRequiredChecks_TopLevelKeepsAliasOR(t *testing.T) {
 	}, "\t\t\t")
 	if !strings.Contains(got, `(cmd.Flags().Changed("name") || cmd.Flags().Changed("n"))`) {
 		t.Errorf("expected alias-OR in required check, got:\n%s", got)
+	}
+}
+
+// TestBodyJSONFallback_VarDecls emits a single flagBodyJSON string and
+// suppresses per-field var declarations when the endpoint opts into the
+// oneOf/anyOf fallback.
+func TestBodyJSONFallback_VarDecls(t *testing.T) {
+	t.Parallel()
+	got := bodyVarDecls(spec.Endpoint{BodyJSONFallback: true})
+	want := "\n\tvar flagBodyJSON string"
+	if got != want {
+		t.Errorf("bodyVarDecls fallback mismatch.\n got:%q\nwant:%q", got, want)
+	}
+}
+
+// TestBodyJSONFallback_FlagRegs registers a single --body-json flag with
+// user-facing help that also names oneOf/anyOf for spec-aware readers.
+func TestBodyJSONFallback_FlagRegs(t *testing.T) {
+	t.Parallel()
+	got := bodyFlagRegs(spec.Endpoint{BodyJSONFallback: true})
+	if !strings.Contains(got, `cmd.Flags().StringVar(&flagBodyJSON, "body-json"`) {
+		t.Errorf("expected --body-json flag registration, got:\n%s", got)
+	}
+	if !strings.Contains(got, "polymorphic schema") {
+		t.Errorf("expected user-facing help text, got:\n%s", got)
+	}
+	if !strings.Contains(got, "oneOf/anyOf") {
+		t.Errorf("expected spec-aware hint mentioning oneOf/anyOf, got:\n%s", got)
+	}
+}
+
+// TestBodyJSONFallback_RequiredChecks emits no required-flag check
+// because the parser cannot tell whether the request body is mandatory
+// for an opaque schema. An empty body either succeeds or surfaces a
+// clear 400 from the API.
+func TestBodyJSONFallback_RequiredChecks(t *testing.T) {
+	t.Parallel()
+	got := bodyRequiredChecks(spec.Endpoint{BodyJSONFallback: true}, "\t\t\t")
+	if got != "" {
+		t.Errorf("bodyRequiredChecks should emit nothing for BodyJSONFallback, got:%q", got)
+	}
+}
+
+// TestBodyJSONFallback_BodyMap dispatches bodyMapForEndpoint to the
+// JSON-fallback renderer when the endpoint has BodyJSONFallback set.
+// The block must parse the flag, reject non-object payloads, and
+// overwrite the empty body map prepared by the caller.
+func TestBodyJSONFallback_BodyMap(t *testing.T) {
+	t.Parallel()
+	got := bodyMapForEndpoint(spec.Endpoint{BodyJSONFallback: true}, "\t")
+	wantSubstrings := []string{
+		`if flagBodyJSON != ""`,
+		`var parsedBodyJSON any`,
+		`json.Unmarshal([]byte(flagBodyJSON), &parsedBodyJSON)`,
+		`asMap, ok := parsedBodyJSON.(map[string]any)`,
+		`body = asMap`,
+		`--body-json must be a JSON object, got JSON %T`,
+	}
+	for _, s := range wantSubstrings {
+		if !strings.Contains(got, s) {
+			t.Errorf("body-json fallback output missing %q, got:\n%s", s, got)
+		}
+	}
+}
+
+// TestBodyJSONFallback_BodyMap_TypedPath confirms bodyMapForEndpoint
+// falls through to the typed renderer when BodyJSONFallback is false,
+// preserving existing CLIs' generated output.
+func TestBodyJSONFallback_BodyMap_TypedPath(t *testing.T) {
+	t.Parallel()
+	endpoint := spec.Endpoint{Body: []spec.Param{{Name: "name", Type: "string"}}}
+	got := bodyMapForEndpoint(endpoint, "\t")
+	if strings.Contains(got, "flagBodyJSON") {
+		t.Errorf("typed-body path must not emit flagBodyJSON branch, got:\n%s", got)
+	}
+	if !strings.Contains(got, `body["name"] = bodyName`) {
+		t.Errorf("expected typed body-map output for name field, got:\n%s", got)
+	}
+}
+
+func TestBodyHasStringBackedBool(t *testing.T) {
+	t.Parallel()
+	endpoint := spec.Endpoint{Body: []spec.Param{{
+		Name: "settings",
+		Type: "object",
+		Fields: []spec.Param{
+			{Name: "all_day", Type: "bool", Required: true},
+		},
+	}}}
+	if !bodyHasStringBackedBool(endpoint) {
+		t.Fatal("expected nested required bool without default to require strconv import")
+	}
+	endpoint.BodyJSONFallback = true
+	if bodyHasStringBackedBool(endpoint) {
+		t.Fatal("body-json fallback bypasses typed bool parsing and must not require strconv")
+	}
+}
+
+func TestNonJSONBodyMaps_RequiredBoolNoDefaultUsesStringZero(t *testing.T) {
+	t.Parallel()
+	body := []spec.Param{{Name: "all_day", Type: "boolean", Required: true}}
+	multipart := multipartBodyMaps(body, "\t")
+	if !strings.Contains(multipart, `if bodyAllDay != "" {`) {
+		t.Errorf("multipart required bool must compare against string zero value, got:\n%s", multipart)
+	}
+	if strings.Contains(multipart, `bodyAllDay != false`) {
+		t.Errorf("multipart required bool must not compare string var to bool false, got:\n%s", multipart)
+	}
+	form := formBodyMaps(body, "\t")
+	if !strings.Contains(form, `if bodyAllDay != "" {`) {
+		t.Errorf("form required bool must compare against string zero value, got:\n%s", form)
+	}
+	if strings.Contains(form, `bodyAllDay != false`) {
+		t.Errorf("form required bool must not compare string var to bool false, got:\n%s", form)
+	}
+}
+
+// TestMCPParamBindings_BodyJSONFallback inserts a single body_json
+// binding with Location="body_json", mirroring the CLI surface. Parser
+// invariant: Body is empty when BodyJSONFallback is set.
+func TestMCPParamBindings_BodyJSONFallback(t *testing.T) {
+	t.Parallel()
+	endpoint := spec.Endpoint{
+		BodyJSONFallback: true,
+		Params:           []spec.Param{{Name: "zoneId", Type: "string"}},
+	}
+	bindings := mcpParamBindings(endpoint, "/zones/{zoneId}/records")
+
+	var foundBodyJSON, foundTypedBody bool
+	for _, b := range bindings {
+		if b.Location == "body_json" && b.PublicName == "body_json" {
+			foundBodyJSON = true
+		}
+		if b.Location == "body" {
+			foundTypedBody = true
+		}
+	}
+	if !foundBodyJSON {
+		t.Errorf("expected a body_json binding, got: %+v", bindings)
+	}
+	if foundTypedBody {
+		t.Errorf("BodyJSONFallback should suppress per-field body bindings, got: %+v", bindings)
+	}
+}
+
+// TestBodyJSONFallback_RequiredChecks_RequiredBody emits a Changed check
+// on --body-json when the OpenAPI requestBody.required flag was true.
+func TestBodyJSONFallback_RequiredChecks_RequiredBody(t *testing.T) {
+	t.Parallel()
+	got := bodyRequiredChecks(spec.Endpoint{BodyJSONFallback: true, BodyRequired: true}, "\t\t\t")
+	if !strings.Contains(got, `cmd.Flags().Changed("body-json")`) {
+		t.Errorf("expected Changed check on body-json for required body, got:%q", got)
+	}
+	if !strings.Contains(got, `"required flag \"%s\" not set", "body-json"`) {
+		t.Errorf("expected body-json in error message, got:%q", got)
+	}
+}
+
+// deepBodyFixture builds a body with one root object whose Fields chain
+// `levels` deep, ending in a string leaf. Each interior object has a
+// scalar sibling so the truncation test can verify which depths emit and
+// which are dropped.
+//
+//	body[level0Obj] (depth 0) ->
+//	  level0Obj.sibling0 (string, depth 1 leaf)
+//	  level0Obj.level1Obj (depth 1 object) ->
+//	    level1Obj.sibling1 (string, depth 2 leaf)
+//	    level1Obj.level2Obj (depth 2 object) ->
+//	      level2Obj.sibling2 (string, depth 3 leaf, truncated at cap=3)
+//	      level2Obj.level3Obj (depth 3 object, truncated at cap=3) -> ...
+func deepBodyFixture(levels int) []spec.Param {
+	if levels < 1 {
+		return nil
+	}
+	// Build from the innermost leaf outward.
+	current := []spec.Param{{Name: "leaf", Type: "string"}}
+	for i := levels - 1; i >= 0; i-- {
+		fields := append([]spec.Param{}, current...)
+		fields = append([]spec.Param{{
+			Name: "sibling" + strconv.Itoa(i),
+			Type: "string",
+		}}, fields...)
+		current = []spec.Param{{
+			Name:   "level" + strconv.Itoa(i) + "Obj",
+			Type:   "object",
+			Fields: fields,
+		}}
+	}
+	return current
+}
+
+// TestBodyMap_DepthCap_TruncatesBelowMax verifies that body-map
+// emission stops recursing into nested objects at maxBodyFlagDepth. A
+// fixture nested 6 levels deep must produce per-field assignments only
+// for depths 0..maxBodyFlagDepth-1; deeper subtrees are silently
+// omitted (the user reaches them via --stdin).
+func TestBodyMap_DepthCap_TruncatesBelowMax(t *testing.T) {
+	t.Parallel()
+	got := bodyMap(deepBodyFixture(6), "\t")
+
+	// The depth-2 sibling and the depth-2 nested map block should both
+	// appear (the cap allows three levels: 0, 1, 2).
+	if !strings.Contains(got, "bodyLevel0ObjLevel1ObjSibling1") {
+		t.Errorf("expected depth-2 sibling leaf to emit, got:\n%s", got)
+	}
+	if !strings.Contains(got, "nestedLevel0ObjLevel1Obj") {
+		t.Errorf("expected depth-2 nested map block, got:\n%s", got)
+	}
+	// The depth-3 sibling, depth-3 object block, and any deeper identifiers
+	// must be absent.
+	if strings.Contains(got, "Sibling2") {
+		t.Errorf("depth-3 sibling must be truncated by the cap, got:\n%s", got)
+	}
+	if strings.Contains(got, "nestedLevel0ObjLevel1ObjLevel2Obj") {
+		t.Errorf("depth-3 nested map block must be truncated, got:\n%s", got)
+	}
+	if strings.Contains(got, "Level3Obj") || strings.Contains(got, "Leaf") {
+		t.Errorf("anything below depth-2 must be omitted, got:\n%s", got)
+	}
+}
+
+// TestBodyVarDecls_DepthCap pins the var-declaration set for a deep body.
+// Only fields reachable within the cap should produce `var bodyX` lines.
+func TestBodyVarDecls_DepthCap(t *testing.T) {
+	t.Parallel()
+	got := bodyVarDecls(spec.Endpoint{Body: deepBodyFixture(6)})
+	for _, want := range []string{
+		"\n\tvar bodyLevel0ObjSibling0 string",
+		"\n\tvar bodyLevel0ObjLevel1ObjSibling1 string",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected within-cap var decl %q, got:\n%s", want, got)
+		}
+	}
+	for _, banned := range []string{
+		"bodyLevel0ObjLevel1ObjLevel2ObjSibling2",
+		"bodyLevel0ObjLevel1ObjLevel2ObjLevel3Obj",
+	} {
+		if strings.Contains(got, banned) {
+			t.Errorf("depth-capped identifier %q must not emit, got:\n%s", banned, got)
+		}
+	}
+}
+
+// TestBodyFlagRegs_DepthCap pins cobra flag registrations for a deep
+// body: only flags reachable within the cap are registered.
+func TestBodyFlagRegs_DepthCap(t *testing.T) {
+	t.Parallel()
+	got := bodyFlagRegs(spec.Endpoint{Body: deepBodyFixture(6)})
+	if !strings.Contains(got, `"level0-obj-level1-obj-sibling1"`) {
+		t.Errorf("expected depth-2 flag registration, got:\n%s", got)
+	}
+	if strings.Contains(got, "sibling2") {
+		t.Errorf("depth-3 flag must be truncated, got:\n%s", got)
+	}
+}
+
+// TestBodyMap_DepthCap_ShallowUnchanged ensures specs that fit inside
+// the cap (2 levels of nesting) emit identical output to today: no
+// truncation, every leaf reachable.
+func TestBodyMap_DepthCap_ShallowUnchanged(t *testing.T) {
+	t.Parallel()
+	got := bodyMap(deepBodyFixture(2), "\t")
+	for _, want := range []string{
+		"bodyLevel0ObjSibling0",
+		"bodyLevel0ObjLevel1ObjSibling1",
+		"bodyLevel0ObjLevel1ObjLeaf",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("2-level fixture must emit %q with no truncation, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestBodyExceedsFlagDepth_True reports truncation when the body nests
+// past the cap. A 4-level fixture exceeds maxBodyFlagDepth=3.
+func TestBodyExceedsFlagDepth_True(t *testing.T) {
+	t.Parallel()
+	if !bodyExceedsFlagDepth(spec.Endpoint{Body: deepBodyFixture(4)}) {
+		t.Error("4-level body must report truncation under cap=3")
+	}
+}
+
+// TestBodyExceedsFlagDepth_False reports no truncation when the body
+// fits inside the cap.
+func TestBodyExceedsFlagDepth_False(t *testing.T) {
+	t.Parallel()
+	if bodyExceedsFlagDepth(spec.Endpoint{Body: deepBodyFixture(2)}) {
+		t.Error("2-level body must not report truncation under cap=3")
+	}
+	if bodyExceedsFlagDepth(spec.Endpoint{Body: []spec.Param{{Name: "n", Type: "string"}}}) {
+		t.Error("flat body must not report truncation")
+	}
+}
+
+// TestBodyExceedsFlagDepth_BodyJSONFallback never reports truncation
+// for oneOf/anyOf bodies; those route through a single --body-json flag
+// and never reach the per-field emitter.
+func TestBodyExceedsFlagDepth_BodyJSONFallback(t *testing.T) {
+	t.Parallel()
+	if bodyExceedsFlagDepth(spec.Endpoint{BodyJSONFallback: true, Body: deepBodyFixture(6)}) {
+		t.Error("BodyJSONFallback bypasses per-field emission and must not report truncation")
+	}
+}
+
+// TestBodyExceedsFlagDepth_CollisionFlattenedSubtree pins the
+// interaction with flattenCollidingBodyFields. When dot-flattened
+// identifier collision clears an object's Fields, the emitters treat
+// that subtree as a JSON-string leaf and never recurse past it -- no
+// depth-cap truncation occurs. The predicate must read the same
+// flattened tree the emitters render, or the --stdin help text reverts
+// to the truncation-warning variant when every field is in fact a
+// per-field flag.
+func TestBodyExceedsFlagDepth_CollisionFlattenedSubtree(t *testing.T) {
+	t.Parallel()
+	// Top-level scalar 'outerInnerLeaf' collides with the dot-flattened
+	// nested leaf outer.inner.leaf (both camelize to bodyOuterInnerLeaf
+	// at depth 3). flattenCollidingBodyFields clears outer.Fields so the
+	// emitters render outer as a JSON-string leaf at depth 0; no part of
+	// the rendered tree exceeds the cap.
+	body := []spec.Param{
+		{Name: "outerInnerLeaf", Type: "string"},
+		{Name: "outer", Type: "object", Fields: []spec.Param{
+			{Name: "inner", Type: "object", Fields: []spec.Param{
+				{Name: "leaf", Type: "string"},
+			}},
+		}},
+	}
+	if bodyExceedsFlagDepth(spec.Endpoint{Body: body}) {
+		t.Error("collision-flattened subtree must not report truncation; emitters see a flat tree")
+	}
+}
+
+// TestBodyExceedsFlagDepth_Multipart returns false for multipart
+// endpoints regardless of nested-object depth: bodyUsesFlatEmission
+// keeps multipart and form-encoded bodies one-flag-per-top-level-param,
+// so deep nesting never triggers the per-field recursion the cap guards.
+func TestBodyExceedsFlagDepth_Multipart(t *testing.T) {
+	t.Parallel()
+	endpoint := spec.Endpoint{
+		Method:             "POST",
+		RequestContentType: "multipart/form-data",
+		Body:               deepBodyFixture(6),
+	}
+	if bodyExceedsFlagDepth(endpoint) {
+		t.Error("multipart endpoint must not report truncation; flat emission never recurses")
+	}
+}
+
+// TestBodyMap_DepthCap_Boundary pins the exact depth at which the cap
+// fires. A fixture nested exactly maxBodyFlagDepth levels is the
+// minimal spec that triggers truncation: the depth-2 object's children
+// are at depth 3 and the recursion check (depth+1 >= maxBodyFlagDepth)
+// stops the walk. The depth-1 sibling must still emit; the depth-2
+// sibling and deeper leaves must be absent. A regression that toggled
+// the check to `>` vs `>=` would flip this assertion.
+func TestBodyMap_DepthCap_Boundary(t *testing.T) {
+	t.Parallel()
+	got := bodyMap(deepBodyFixture(maxBodyFlagDepth), "\t")
+	if !strings.Contains(got, "bodyLevel0ObjSibling0") {
+		t.Errorf("depth-1 sibling must emit at the boundary fixture, got:\n%s", got)
+	}
+	if !strings.Contains(got, "bodyLevel0ObjLevel1ObjSibling1") {
+		t.Errorf("depth-2 sibling must emit at the boundary fixture, got:\n%s", got)
+	}
+	if strings.Contains(got, "Sibling2") || strings.Contains(got, "Leaf") {
+		t.Errorf("boundary fixture must not emit depth-3 leaves, got:\n%s", got)
+	}
+}
+
+// TestBodyRequiredChecks_DepthCap omits required-flag checks for fields
+// truncated by the cap. The --stdin path bypasses required checks
+// wholesale, so deep required fields are reachable via stdin only.
+func TestBodyRequiredChecks_DepthCap(t *testing.T) {
+	t.Parallel()
+	// Build a deep fixture where the deepest sibling is required.
+	body := deepBodyFixture(6)
+	// Walk to the depth-3 sibling and mark it required.
+	cursor := &body[0]
+	for range 3 {
+		// cursor.Fields[0] is "siblingN" (string leaf), cursor.Fields[1] is
+		// "level<N+1>Obj" (the nested object). Descend the object branch.
+		cursor = &cursor.Fields[1]
+	}
+	// cursor now points at level3Obj; mark its sibling (depth 4 leaf)
+	// required.
+	cursor.Fields[0].Required = true
+
+	got := bodyRequiredChecks(spec.Endpoint{Body: body}, "\t\t\t")
+	if strings.Contains(got, "sibling3") {
+		t.Errorf("required check on a truncated deep leaf must not emit, got:\n%s", got)
 	}
 }
