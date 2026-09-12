@@ -1,5 +1,14 @@
 # Changelog
 
+## Fork maintenance — 2026-09-13
+
+- Emit the patched Go 1.26.8 toolchain for REST and BLE modules while retaining
+  the Go 1.26 language floor and enforced vulnerability scan. Track runtime
+  validation and rollback evidence in
+  [the Windows reconciliation report](docs/reports/windows-runtime-reconciliation-2026-09-13.md).
+- Repair the governance issue's placeholder body and restore Windows runtime
+  validation to the local task index.
+
 ## Fork maintenance — 2026-09-08
 
 - Preserved the original fork lane as merge ancestry while retaining the newer

@@ -8,8 +8,18 @@ start from the repo.
 
 | Issue | Status | Scope | Notes |
 | --- | --- | --- | --- |
+| [#8](https://github.com/iMelki/cli-printing-press/issues/8) | Open | Generated toolchain security | REST and BLE output pinned Go 1.26.4, blocking normal govulncheck with six reachable standard-library findings. Patch to verified Go 1.26.8 and validate emitted modules plus the full fixture before runtime replacement. |
+| [#5](https://github.com/iMelki/cli-printing-press/issues/5) | Open | Windows validation runtime | Current source already uses the platform executable helper; the installed legacy generator is still 4.2.2 at the start of the [runtime reconciliation](docs/reports/windows-runtime-reconciliation-2026-09-13.md). Track actual installed-binary and generated-help proof, not a duplicate source patch. |
 | [#4](https://github.com/iMelki/cli-printing-press/issues/4) | Open | Upstream sync and dev-to-main promotion | Plan a safe report-first sync from `mvanhorn/cli-printing-press`, trial integration away from active `dev`, preserve fork governance work, then produce a reviewed `dev -> main` promotion brief. |
 | [#3](https://github.com/iMelki/cli-printing-press/issues/3) | Open | Governance and secrets baseline | Backfills the recurring projects-ops quarterly health findings: CODEOWNERS, issue templates, labels manifest, secrets filter/store, `.git-secrets-ignore`, `.gitattributes filter=secrets`, pre-commit guard, and `.gitignore` coverage for local secrets artifacts. |
+
+The #3 placeholder-only body was repaired with exact structured readback on
+2026-09-13. CODEOWNERS exists; the remaining baseline still needs implementation
+and focused verification. The historical payload gap is recorded in
+[agent-settings#133](https://github.com/iMelki/agent-settings/issues/133#issuecomment-5649343102).
+The shared asset owner also holds the
+[skill portability and stale runtime-reference follow-up](https://github.com/iMelki/cli-printing-press/issues/3#issuecomment-5649381962).
+That agent-settings update is coordinated separately from this fork's changes.
 
 ## Recently Completed
 

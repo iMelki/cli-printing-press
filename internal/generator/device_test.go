@@ -26,6 +26,9 @@ func TestGenerateMinimalBLEDeviceCLICompiles(t *testing.T) {
 	require.NoError(t, NewDevice(ds, outputDir).Generate())
 
 	assert.FileExists(t, filepath.Join(outputDir, "go.mod"))
+	gomod, err := os.ReadFile(filepath.Join(outputDir, "go.mod"))
+	require.NoError(t, err)
+	assert.Contains(t, string(gomod), "toolchain go1.26.8")
 	assert.FileExists(t, filepath.Join(outputDir, "cmd", "ble-temperature-sensor-pp-cli", "main.go"))
 	assert.FileExists(t, filepath.Join(outputDir, "internal", "device", "transport.go"))
 	assert.FileExists(t, filepath.Join(outputDir, "internal", "cliutil", "verifyenv.go"))
