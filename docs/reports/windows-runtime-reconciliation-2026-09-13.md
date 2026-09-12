@@ -57,7 +57,25 @@ was produced locally. A research-run-id warning concerns the separate phase-5
 acceptance workflow; this credential-free generation smoke did not run that
 workflow or claim its acceptance.
 
-Installed-runtime replacement remains the final step after source publication.
+Source commit 87ab14d772211283a886d1f9ed94888ad9d5c995 was pushed to origin/dev.
+A clean build from that commit reports Go 1.26.8 and `vcs.modified=false`.
+Both installed generator entrypoints now use this binary; installed version
+and generation help checks passed. Display version remains 4.25.0, so use the
+build revision to distinguish the maintained fork.
+
+Installed SHA-256:
+`64e3d51dee1081b32b6861b5cbdb62986a9414039080bd191a7b81d2f5fea0b0`.
+The retained 4.2.2 rollback copy matches its pre-install hash:
+`b8121fa60c38719ab5fcbba0a77b9be103df27c1b0e05615f8f20f241910e0f1`.
+
+Private receipt: `%LOCALAPPDATA%/MemSys/eval-artifacts/printing-press/runtime-install-20260913.json`.
+Rollback copy: `%LOCALAPPDATA%/MemSys/backups/printing-press-20260913/printing-press-4.2.2.exe`.
+Rollback consists of restoring that retained file to the legacy Go-bin
+entrypoint; the canonical new entrypoint can be retained or removed separately.
+Neither global Go configuration nor an external upstream was modified.
+
+#5 and #8 were closed through structured issue writes with exact body and state
+readback. #3 and #4 remain open for their distinct governance and promotion work.
 
 ## Research
 
